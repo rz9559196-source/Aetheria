@@ -83,10 +83,9 @@ type S = {
 };
 
 export const useStore = create<S>((set, get) => ({
-  // Token NEVER auto-loaded — user always sees login on refresh.
-  // (Saved credentials pre-fill the form if "remember me" was checked.)
-  token: null,
-  username: null,
+  // Restore access token between GameHub iframe launches.
+  token: localStorage.getItem("token"),
+  username: localStorage.getItem("username"),
   characters: null,
   characterId: localStorage.getItem("characterId"),
   room: null,
