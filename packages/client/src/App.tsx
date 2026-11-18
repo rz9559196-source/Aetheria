@@ -54,10 +54,12 @@ export function App() {
         if (!response.ok) throw new Error(data.error || "Не вдалося підтвердити вхід GameHub.");
         if (active) {
           const characters = Array.isArray(data.characters) ? data.characters : [];
-          const savedCharacterId = localStorage.getItem("characterId");
-          if (savedCharacterId && !characters.some((character: any) => character.id === savedCharacterId)) {
-            localStorage.removeItem("characterId");
-          }
+          try {
+            const savedCharacterId = localStorage.getItem("characterId");
+            if (savedCharacterId && !characters.some((character: any) => character.id === savedCharacterId)) {
+              localStorage.removeItem("characterId");
+            }
+          } catch { /* Storage may be unavailable in privacy-restricted webviews. */ }
           setAuth(data.token, data.username, characters);
           setSsoReady(true);
         }
