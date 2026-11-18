@@ -69,7 +69,7 @@ const WorldCompanionPanel = lazy(() => import("./ui/WorldCompanionPanel").then((
 const CombatLog = lazy(() => import("./ui/CombatLog").then((m) => ({ default: m.CombatLog })));
 const WorldMap = lazy(() => import("./ui/WorldMap").then((m) => ({ default: m.WorldMap })));
 
-const SERVER_WS = `ws://${location.hostname}:2567`;
+const SERVER_WS = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
 export function Game() {
   const t = useT();

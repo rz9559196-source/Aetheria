@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: aetheria-online
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AETHERIA_SSO_SECRET
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://gamehub-t6fl.onrender.com
+      - key: TRUST_PROXY
+        value: "1"
+      - key: ADMIN_USER_IDS
+        value: ""

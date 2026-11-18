@@ -66,10 +66,13 @@ app.use(helmet({
       "style-src":    ["'self'", "'unsafe-inline'"],
       "worker-src":   ["'self'", "blob:"],
       "font-src":     ["'self'", "data:"],
+      "frame-ancestors": ["'self'", ...ALLOWED_ORIGINS],
     },
   },
-  // PWA Service Worker registration needs same-origin policy permissive
+  // PWA Service Worker registration needs same-origin policy permissive.
+  // CSP frame-ancestors above is the explicit allow-list for the GameHub iframe.
   crossOriginEmbedderPolicy: false,
+  frameguard: false,
 }));
 const httpServer = http.createServer(app);
 

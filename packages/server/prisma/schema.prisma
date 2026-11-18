@@ -10,14 +10,17 @@ datasource db {
   // temporarily switch provider to "sqlite" + use file:./prisma/dev.db.
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
   id           String       @id @default(cuid())
   username     String       @unique
   passwordHash String
+  telegramId  String?      @unique
   createdAt    DateTime     @default(now())
   characters   Character[]
+  refreshTokens RefreshToken[]
   // Security questions for account recovery
   securityQuestion1 String?
   securityAnswer1   String?
@@ -81,6 +84,25 @@ model World {
 
   @@index([status, privacy])
   @@index([inviteCode])
+}
+
+model RefreshToken {
+  tokenHash String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model SsoTicketNonce {
+  jti       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }
 
 model Character {
