@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { prisma } from "./db.js";
 import { GAME_CONFIG, JOBS, type JobId } from "@game/shared";
 import { logger } from "./logger.js";
@@ -46,81 +46,56 @@ const MAX_CHARACTERS_PER_USER = 3;
 // Dummy bcrypt hash to equalize login timing for non-existent users (prevent username enumeration)
 const DUMMY_HASH = "$2a$10$abcdefghijklmnopqrstuv1234567890abcdefghijklmnopqrstuv";
 
-// ── Redis presence ─────────────────────────────────────────────────────────
-// In prod (NODE_ENV=production) Redis is REQUIRED for refresh-token storage
-// and revocation. Without it, /refresh would accept any token forever and
-// logout/password-reset could not invalidate sessions.
-async function getRedis() {
-  if (!process.env.REDIS_URL) return null;
-  try {
-    const { default: Redis } = await import("ioredis-mock");
-    return new Redis(process.env.REDIS_URL);
-  } catch { return null; }
-}
-
+// ── Persistent session storage ────────────────────────────────────────────
+// Refresh tokens are stored as SHA-256 hashes in PostgreSQL, not in an
+// in-memory mock. Revocation therefore survives Render restarts.
 const IS_PROD = process.env.NODE_ENV === "production";
-if (IS_PROD && !process.env.REDIS_URL) {
-  console.error("[FATAL] REDIS_URL is required in production for refresh-token storage and revocation");
+if (IS_PROD && !process.env.AETHERIA_SSO_SECRET) {
+  console.error("[FATAL] AETHERIA_SSO_SECRET is required in production for GameHub login");
   process.exit(1);
 }
 if (IS_PROD && !process.env.CAPTCHA_SECRET) {
-  // Don't crash — let operators run a closed-registration prod if they want.
-  // But log loudly so they don't deploy by accident with captcha bypassed.
   console.error("[WARN] CAPTCHA_SECRET unset in production — /register will fail-closed");
 }
 if (IS_PROD && !process.env.ADMIN_USER_IDS) {
   console.error("[WARN] ADMIN_USER_IDS unset — /api/admin/audit will be disabled");
 }
 
-// ── Refresh token helpers ───────────────────────────────────────────────────
-// Key by token alone: `refresh:<token>` → uid. This lets /refresh look up the
-// owning uid from the token (instead of trusting client-supplied uid), and
-// makes revocation single-call. Per-user enumeration uses `refresh-user:<uid>`
-// SET of tokens.
-async function storeRefreshToken(uid: string, token: string): Promise<void> {
-  const redis = await getRedis();
-  if (!redis) {
-    if (IS_PROD) throw new Error("Redis unavailable; refresh-token storage failed");
-    return;
-  }
-  await redis.setex(`refresh:${token}`, REFRESH_TTL_SECS, uid);
-  await redis.sadd(`refresh-user:${uid}`, token);
-  await redis.expire(`refresh-user:${uid}`, REFRESH_TTL_SECS);
+function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
+async function storeRefreshToken(uid: string, token: string): Promise<void> {
+  await prisma.refreshToken.create({
+    data: {
+      tokenHash: hashRefreshToken(token),
+      userId: uid,
+      expiresAt: new Date(Date.now() + REFRESH_TTL_SECS * 1000),
+    },
+  });
+}
+
+// Atomically consume a refresh token so concurrent replays can only win once.
 async function lookupRefreshToken(token: string): Promise<string | null> {
-  const redis = await getRedis();
-  if (!redis) {
-    if (IS_PROD) throw new Error("Redis unavailable; refresh-token lookup failed");
+  const tokenHash = hashRefreshToken(token);
+  const now = new Date();
+  const row = await prisma.refreshToken.findUnique({ where: { tokenHash } });
+  if (!row || row.expiresAt <= now) {
+    if (row) await prisma.refreshToken.deleteMany({ where: { tokenHash } });
     return null;
   }
-  const uid = await redis.get(`refresh:${token}`);
-  return uid ?? null;
+  const claimed = await prisma.refreshToken.deleteMany({
+    where: { tokenHash, expiresAt: { gt: now } },
+  });
+  return claimed.count === 1 ? row.userId : null;
 }
 
 async function revokeRefreshToken(token: string): Promise<void> {
-  const redis = await getRedis();
-  if (!redis) {
-    if (IS_PROD) throw new Error("Redis unavailable; refresh-token revoke failed");
-    return;
-  }
-  const uid = await redis.get(`refresh:${token}`);
-  await redis.del(`refresh:${token}`);
-  if (uid) await redis.srem(`refresh-user:${uid}`, token);
+  await prisma.refreshToken.deleteMany({ where: { tokenHash: hashRefreshToken(token) } });
 }
 
 async function revokeAllRefreshTokens(uid: string): Promise<void> {
-  const redis = await getRedis();
-  if (!redis) {
-    if (IS_PROD) throw new Error("Redis unavailable; refresh-token revoke-all failed");
-    return;
-  }
-  const tokens: string[] = await redis.smembers(`refresh-user:${uid}`);
-  if (tokens.length) {
-    const keys = tokens.map((t) => `refresh:${t}`);
-    await redis.del(...keys);
-  }
-  await redis.del(`refresh-user:${uid}`);
+  await prisma.refreshToken.deleteMany({ where: { userId: uid } });
 }
 
 function generateRefreshToken(): string {
@@ -139,6 +114,84 @@ export function validatePassword(password: string): string | null {
   if (!/[0-9]/.test(password)) return "Password must contain a digit";
   return null;
 }
+
+// Exchange a short-lived, single-use assertion issued by the GameHub backend.
+// The browser never receives the shared signing secret or Telegram bot token.
+authRouter.post("/gamehub-sso", async (req, res) => {
+  const ssoSecret = process.env.AETHERIA_SSO_SECRET;
+  const ticket = req.body?.ticket;
+  if (!ssoSecret || typeof ticket !== "string" || ticket.length > 4096) {
+    return res.status(400).json({ error: "invalid SSO ticket" });
+  }
+
+  let claims: any;
+  try {
+    claims = jwt.verify(ticket, ssoSecret, {
+      algorithms: ["HS256"],
+      issuer: "gamehub",
+      audience: "aetheria",
+      clockTolerance: 5,
+    });
+  } catch {
+    return res.status(401).json({ error: "SSO ticket invalid or expired" });
+  }
+
+  const telegramId = String(claims?.sub ?? "");
+  const jti = claims?.jti;
+  if (!/^\d{1,20}$/.test(telegramId) || typeof jti !== "string" || jti.length < 16) {
+    return res.status(401).json({ error: "SSO ticket claims invalid" });
+  }
+
+  try {
+    await prisma.ssoTicketNonce.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+    await prisma.ssoTicketNonce.create({
+      data: { jti, expiresAt: new Date(Number(claims.exp) * 1000) },
+    });
+  } catch (error: any) {
+    if (String(error?.code) === "P2002") {
+      return res.status(401).json({ error: "SSO ticket already used" });
+    }
+    logger.error("auth.gamehubSso.nonceFailed", { error: String(error?.message ?? error) });
+    return res.status(503).json({ error: "SSO temporarily unavailable" });
+  }
+
+  let user = await prisma.user.findUnique({
+    where: { telegramId },
+    include: { characters: { orderBy: { createdAt: "asc" } } },
+  });
+
+  if (!user) {
+    const rawName = typeof claims.username === "string" ? claims.username : "";
+    const safeName = /^[a-zA-Z0-9_]{3,24}$/.test(rawName) ? rawName : "";
+    let username = safeName || `tg_${telegramId}`;
+    if (await prisma.user.findUnique({ where: { username } })) username = `tg_${telegramId}`;
+    const passwordHash = await bcrypt.hash(randomBytes(32).toString("hex"), 12);
+    try {
+      user = await prisma.user.create({
+        data: { telegramId, username, passwordHash },
+        include: { characters: { orderBy: { createdAt: "asc" } } },
+      });
+    } catch (error: any) {
+      if (String(error?.code) !== "P2002") throw error;
+      user = await prisma.user.findUnique({
+        where: { telegramId },
+        include: { characters: { orderBy: { createdAt: "asc" } } },
+      });
+      if (!user) throw error;
+    }
+  }
+
+  const accessToken = jwt.sign({ uid: user.id, username: user.username }, SECRET, { expiresIn: TOKEN_TTL });
+  const refreshToken = generateRefreshToken();
+  await storeRefreshToken(user.id, refreshToken);
+  auditService.log("auth.gamehubSso.success", { userId: user.id, ip: req.ip });
+  return res.json({
+    token: accessToken,
+    refreshToken,
+    username: user.username,
+    characters: user.characters.map(summarizeCharacter),
+  });
+});
 
 function summarizeCharacter(c: any) {
   return {
@@ -260,9 +313,7 @@ authRouter.post("/refresh", async (req, res) => {
   const uid = await lookupRefreshToken(refreshToken);
   if (!uid) return res.status(401).json({ error: "token revoked or expired" });
 
-  // Single-use rotation: revoke the old token BEFORE issuing the new one so
-  // a replayed/intercepted token cannot mint additional access tokens.
-  await revokeRefreshToken(refreshToken);
+  // lookupRefreshToken atomically consumes the old token before rotation.
 
   // Look up username so we can embed it in the new access token.
   const user = await prisma.user.findUnique({ where: { id: uid } });
