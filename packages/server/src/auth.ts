@@ -303,9 +303,8 @@ function authMiddleware(req: any, res: any, next: any) {
 }
 
 authRouter.post("/refresh", async (req, res) => {
-  // Trust the refresh token, NOT the client-supplied uid. Redis maps token → uid
-  // so we can look up the real owner. This prevents an attacker who steals one
-  // refresh token from minting access tokens for arbitrary user IDs.
+  // Trust the refresh token, NOT the client-supplied uid. PostgreSQL maps the
+  // token hash to its owner, preventing arbitrary uid substitution.
   const { refreshToken } = req.body ?? {};
   if (typeof refreshToken !== "string" || refreshToken.length < 32) {
     return res.status(400).json({ error: "invalid body" });
