@@ -6,8 +6,8 @@ This configuration is intended for a $0/month test deployment. Aetheria runs as 
 
 1. Create a free account at https://neon.com/.
 2. Create a project named \`aetheria\`.
-3. Open **Connect** and copy the pooled or direct PostgreSQL connection string.
-4. Use the connection string that includes SSL (usually \`?sslmode=require\`). Keep it private.
+3. Open **Connect** and copy two PostgreSQL connection strings: one with **Connection pooling ON** and one with **Connection pooling OFF**.
+4. Keep both strings private and ensure they include SSL (usually \`?sslmode=require\`).
 
 Neon's current Free plan includes 1 GB storage and 100 compute-unit hours per project each month. Compute sleeps after inactivity and wakes when queried. When the monthly compute or network allowance is exhausted, the database pauses until the allowance resets. See https://neon.com/docs/introduction/plans.
 
@@ -18,7 +18,8 @@ Neon's current Free plan includes 1 GB storage and 100 compute-unit hours per pr
 3. Select branch \`render-telegram-integration\` (or \`main\` after merging the PR).
 4. Render reads \`render.yaml\` and creates only a **Free** web service. It does not create a paid Render database.
 5. When prompted for environment variables, set:
-   - \`DATABASE_URL\`: the Neon PostgreSQL connection string
+   - \`DATABASE_URL\`: the Neon pooled connection string (pooling ON)
+   - \`DIRECT_URL\`: the Neon direct connection string (pooling OFF; used for schema migrations)
    - \`AETHERIA_SSO_SECRET\`: a random secret of at least 32 characters
 
 Generate a secret locally with:
