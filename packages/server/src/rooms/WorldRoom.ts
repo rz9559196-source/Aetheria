@@ -146,9 +146,18 @@ export class WorldRoom extends Room<WorldState> {
   // Character.blocklistJson DB field.
   blocklist = new Map<string, Set<string>>();
 
-  static async onAuth(_token: string, request: any) {
-    const tokenStr = request?.headers?.token || request?.query?.token || "";
-    // we accept token from `options` instead via per-instance check below
+  static async onAuth(_client: Client, options: { token?: string; characterId?: string }, _request: any) {
+    // Reject unauthenticated matchmaking before the connection enters a room.
+    // onJoin repeats the ownership check as defense in depth.
+    const payload = verifyToken(typeof options?.token === "string" ? options.token : "");
+    if (!payload) throw new Error("invalid token");
+    if (typeof options?.characterId !== "string" || !options.characterId) {
+      throw new Error("missing characterId");
+    }
+    const character = await prisma.character.findUnique({ where: { id: options.characterId } });
+    if (!character || character.userId !== payload.uid) {
+      throw new Error("unauthorized character");
+    }
     return true;
   }
 
