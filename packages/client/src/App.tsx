@@ -26,38 +26,44 @@ export function App() {
   const [ssoError, setSsoError] = useState<string | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const ticket = params.get("gamehub_ticket");
-    if (!ticket) return;
-    params.delete("gamehub_ticket");
-    const cleanUrl = window.location.pathname + (params.size ? "?" + params.toString() : "") + window.location.hash;
-    window.history.replaceState({}, document.title, cleanUrl);
+    const expectedOrigin = import.meta.env.VITE_GAMEHUB_ORIGIN || "https://gamehub-t6fl.onrender.com";
     let active = true;
-    setSsoBusy(true);
-    fetch("/api/auth/gamehub-sso", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ticket }),
-    })
-      .then(async (response) => {
+    let exchanging = false;
+
+    async function onMessage(event: MessageEvent) {
+      if (event.origin !== expectedOrigin || event.source !== window.parent) return;
+      if (event.data?.type !== "GAMEHUB_SSO" || typeof event.data.ticket !== "string") return;
+      if (exchanging || event.data.ticket.length > 4096) return;
+      exchanging = true;
+      setSsoBusy(true);
+      setSsoError(null);
+      try {
+        const response = await fetch("/api/auth/gamehub-sso", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticket: event.data.ticket }),
+        });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Не вдалося підтвердити вхід GameHub.");
         if (active) setAuth(data.token, data.username, data.characters ?? []);
-      })
-      .catch((error) => {
+      } catch (error: any) {
         if (active) setSsoError(error?.message || "Помилка авторизації.");
-      })
-      .finally(() => {
+      } finally {
         if (active) setSsoBusy(false);
-      });
-    return () => { active = false; };
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => {
+      active = false;
+      window.removeEventListener("message", onMessage);
+    };
   }, [setAuth]);
 
-  const hasTicket = new URLSearchParams(window.location.search).has("gamehub_ticket");
   return (
     <>
       <OrientationHint />
-      {ssoBusy || (hasTicket && !token)
+      {ssoBusy
         ? <div className="w-full h-full min-h-screen flex items-center justify-center bg-[#090912] text-violet-200">Перевіряємо вхід GameHub…</div>
         : !token ? <SsoRequired error={ssoError ?? undefined} />
         : !characterId ? <CharacterSelect />
