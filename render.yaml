@@ -2,7 +2,7 @@ services:
   - type: web
     name: aetheria-online
     runtime: docker
-    plan: standard
+    plan: free
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -10,9 +10,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: aetheria-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: AETHERIA_SSO_SECRET
@@ -23,8 +21,3 @@ services:
         value: "1"
       - key: ADMIN_USER_IDS
         value: ""
-databases:
-  - name: aetheria-db
-    databaseName: aetheria
-    user: aetheria
-    plan: basic-256mb
