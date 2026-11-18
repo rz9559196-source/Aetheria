@@ -66,6 +66,7 @@ app.use(helmet({
       "style-src":    ["'self'", "'unsafe-inline'"],
       "worker-src":   ["'self'", "blob:"],
       "font-src":     ["'self'", "data:"],
+      "frame-ancestors": ["'self'", ...ALLOWED_ORIGINS],
     },
   },
   // PWA Service Worker registration needs same-origin policy permissive
