@@ -23,18 +23,25 @@ export function App() {
   const characterId = useStore((s) => s.characterId);
   const setAuth = useStore((s) => s.setAuth);
   const [ssoBusy, setSsoBusy] = useState(false);
+  const [ssoReady, setSsoReady] = useState(false);
   const [ssoError, setSsoError] = useState<string | null>(null);
 
   useEffect(() => {
     const expectedOrigin = import.meta.env.VITE_GAMEHUB_ORIGIN || "https://gamehub-t6fl.onrender.com";
     let active = true;
     let exchanging = false;
+    const timeout = window.setTimeout(() => {
+      if (!active) return;
+      setSsoError("Відкрий Aetheria через GameHub, щоб увійти.");
+      setSsoReady(true);
+    }, 12000);
 
     async function onMessage(event: MessageEvent) {
       if (event.origin !== expectedOrigin || event.source !== window.parent) return;
       if (event.data?.type !== "GAMEHUB_SSO" || typeof event.data.ticket !== "string") return;
       if (exchanging || event.data.ticket.length > 4096) return;
       exchanging = true;
+      window.clearTimeout(timeout);
       setSsoBusy(true);
       setSsoError(null);
       try {
@@ -45,9 +52,20 @@ export function App() {
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Не вдалося підтвердити вхід GameHub.");
-        if (active) setAuth(data.token, data.username, data.characters ?? []);
+        if (active) {
+          const characters = Array.isArray(data.characters) ? data.characters : [];
+          const savedCharacterId = localStorage.getItem("characterId");
+          if (savedCharacterId && !characters.some((character: any) => character.id === savedCharacterId)) {
+            localStorage.removeItem("characterId");
+          }
+          setAuth(data.token, data.username, characters);
+          setSsoReady(true);
+        }
       } catch (error: any) {
-        if (active) setSsoError(error?.message || "Помилка авторизації.");
+        if (active) {
+          setSsoError(error?.message || "Помилка авторизації.");
+          setSsoReady(true);
+        }
       } finally {
         if (active) setSsoBusy(false);
       }
@@ -56,6 +74,7 @@ export function App() {
     window.addEventListener("message", onMessage);
     return () => {
       active = false;
+      window.clearTimeout(timeout);
       window.removeEventListener("message", onMessage);
     };
   }, [setAuth]);
@@ -63,9 +82,9 @@ export function App() {
   return (
     <>
       <OrientationHint />
-      {ssoBusy
+      {!ssoReady || ssoBusy
         ? <div className="w-full h-full min-h-screen flex items-center justify-center bg-[#090912] text-violet-200">Перевіряємо вхід GameHub…</div>
-        : !token ? <SsoRequired error={ssoError ?? undefined} />
+        : ssoError || !token ? <SsoRequired error={ssoError ?? undefined} />
         : !characterId ? <CharacterSelect />
         : <Game />}
     </>
